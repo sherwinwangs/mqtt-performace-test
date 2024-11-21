@@ -1,0 +1,30 @@
+{
+  "total_connections_attempted": 200,
+  "total_successful_connections": 200,
+  "total_failed_connections": 0,
+  "overall_average_connection_time": 283551155,
+  "average_connections_per_second": 1.6652749733074153,
+  "start_time": "2024-11-21T06:31:02.839928175Z",
+  "end_time": "2024-11-21T06:33:02.940213837Z",
+  "connect_metrics": [
+    {
+      "batch_number": 1,
+      "successful_connections": 100,
+      "failed_connections": 0,
+      "average_connection_time": 293519682,
+      "min_connection_time": 164835854,
+      "max_connection_time": 339425245
+    },
+    {
+      "batch_number": 2,
+      "successful_connections": 100,
+      "failed_connections": 0,
+      "average_connection_time": 273582628,
+      "min_connection_time": 148039434,
+      "max_connection_time": 320174966
+    }
+  ],
+  "total_messages_sent": 237111,
+  "total_messages_failed": 0,
+  "overall_throughput": 1975.925
+}

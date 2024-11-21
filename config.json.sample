@@ -1,0 +1,11 @@
+{
+  "broker_address": "ssl://xxxxx.mqtt.tencenttdmq.com:8883",
+  "client_folder_path": "path_to_your_client_cert_folder",
+  "increment_step": 100,
+  "max_connections": 200,
+  "connect_timeout": "2000ms",
+  "message_size": 480,
+  "message_frequency": "100ms",
+  "test_duration": "120s",
+  "report_file": "report.json"
+}
