@@ -2,10 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"github.com/wukongcloud/mqtt-performace-test/app/throughput"
 	"log"
 	"os"
 
-	"github.com/wukongcloud/mqtt-performace-test/app/throughput"
 	"github.com/wukongcloud/mqtt-performace-test/models"
 )
 
@@ -20,6 +20,13 @@ func main() {
 	if err := json.Unmarshal(configData, &config); err != nil {
 		log.Fatalf("Invalid config file: %v", err)
 	}
-	//connect.ConnectTest(config)
-	throughput.ThroughputTest(config)
+
+	if err := os.MkdirAll(config.ReportDir, 0755); err != nil {
+		log.Fatalf("Failed to create report dir %s: %v", config.ReportDir, err)
+	}
+
+	//connect.RunConnectTest(config)
+	//eventLatency.EventLatencyTest(config)
+
+	throughput.RunThroughputTest(config, 1)
 }

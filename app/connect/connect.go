@@ -41,10 +41,9 @@ func connectClient(clientID, brokerAddress, clientFolderPath string, timeout tim
 
 	connTime := time.Since(startTime)
 	connDataChan <- models.ConnectionData{ClientID: clientID, ConnectionTime: connTime}
-	//log.Printf("Client %s connected successfully in %v", clientID, connTime)
 }
 
-func ConnectTest(config models.Config) {
+func RunConnectTest(config models.Config) {
 	connDataChan := make(chan models.ConnectionData, config.MaxConnections)
 	var wg sync.WaitGroup
 
@@ -63,7 +62,6 @@ func ConnectTest(config models.Config) {
 
 		// Start a batch of connections
 		for i := 0; i < currentBatch; i++ {
-			//clientID := fmt.Sprintf("Client%06d", totalConnections+i+1)
 			clientID := fmt.Sprintf("LE40B8BBML1%06d", totalConnections+i+1)
 			wg.Add(1)
 			go func() {
@@ -135,8 +133,8 @@ func ConnectTest(config models.Config) {
 	testDuration := endTime.Sub(startTime).Seconds()
 	avgConnectionsPerSecond := float64(successfulConnections) / testDuration
 
-	// Prepare summary data
-	summary := models.SummaryData{
+	// ConnectData
+	connectData := models.ConnectData{
 		TotalConnectionsAttempted:    totalConnections,
 		TotalSuccessfulConnections:   successfulConnections,
 		TotalFailedConnections:       failedConnections,
@@ -146,9 +144,13 @@ func ConnectTest(config models.Config) {
 		EndTime:                      endTime,
 		ConnectMetrics:               batchMetrics,
 	}
+	// Prepare summary data
+	summary := models.SummaryData{
+		Connect: connectData,
+	}
 
 	// Write results to report file
-	reportFile, err := os.Create(config.ReportFile)
+	reportFile, err := os.Create(config.ReportDir + "/connect_report.json")
 	if err != nil {
 		log.Fatalf("Failed to create report file: %v", err)
 	}
@@ -160,5 +162,5 @@ func ConnectTest(config models.Config) {
 	}
 	reportFile.Write(reportJSON)
 
-	log.Printf("Connection scalability test completed. Report saved to %s", config.ReportFile)
+	log.Printf("Connection scalability test completed. Report saved to %s", config.ReportDir)
 }

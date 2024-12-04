@@ -1,6 +1,7 @@
 package throughput
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -14,11 +15,127 @@ import (
 	"github.com/wukongcloud/mqtt-performace-test/utils"
 )
 
-// Perform the throughput test by connecting clients in batches
-func ThroughputTest(config models.Config) {
+// subscribeToTopic receives messages and calculates latencies.
+func subscribeToTopic(clientID, topic, brokerAddress, clientFolderPath string, qos int, testDuration time.Duration, metricsChan chan<- models.MessageLatencyMetric, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	// Setup the TLS configuration for the client
+	caFile := filepath.Join(clientFolderPath, "ca.crt")
+	certFile := filepath.Join(clientFolderPath, clientID, "client.chain.crt")
+	keyFile := filepath.Join(clientFolderPath, clientID, "client.key")
+
+	tlsConfig, err := utils.NewTLSConfig(caFile, certFile, keyFile)
+	if err != nil {
+		log.Printf("Consumer failed to load TLS config: %v", err)
+		return
+	}
+
+	opts := mqtt.NewClientOptions().AddBroker(brokerAddress).SetClientID(clientID).SetTLSConfig(tlsConfig)
+	client := mqtt.NewClient(opts)
+	token := client.Connect()
+	if !token.WaitTimeout(10*time.Second) || token.Error() != nil {
+		log.Printf("Consumer failed to connect: %v", token.Error())
+		return
+	}
+	defer client.Disconnect(250)
+
+	//topic := "test/to/#" // Subscribe to all latency events
+	latencies := make([]time.Duration, 0) // Holds latency for each received message
+	var messageCount int64 = 0
+
+	token = client.Subscribe(topic, byte(qos), func(client mqtt.Client, msg mqtt.Message) {
+		timestampBytes := msg.Payload()[:8]
+		sentTime := time.Unix(0, int64(binary.BigEndian.Uint64(timestampBytes)))
+		latency := time.Since(sentTime)
+		latencies = append(latencies, latency)
+		messageCount++
+	})
+	if !token.WaitTimeout(10*time.Second) || token.Error() != nil {
+		log.Printf("Consumer failed to subscribe: %v", token.Error())
+		return
+	}
+
+	// Every second, print out the statistics for the previous second
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	// Monitor messages for the specified test duration
+	startTime := time.Now()
+
+	for time.Since(startTime) < testDuration {
+		select {
+		case <-ticker.C:
+			// At the end of each second, calculate the stats for the last second
+			if len(latencies) > 0 {
+				// Calculate stats for the current second
+				totalLatency := time.Duration(0)
+				minLatency := latencies[0]
+				maxLatency := latencies[0]
+
+				for _, latency := range latencies {
+					totalLatency += latency
+					if latency < minLatency {
+						minLatency = latency
+					}
+					if latency > maxLatency {
+						maxLatency = latency
+					}
+				}
+
+				// Calculate average latency for this second
+				averageLatency := totalLatency / time.Duration(len(latencies))
+
+				// Print out the stats for this second
+				log.Printf("[Real-Time] Messages/sec: %d, Avg Latency: %v, Min Latency: %v, Max Latency: %v",
+					len(latencies), averageLatency, minLatency, maxLatency)
+
+				// Reset latencies for the next second
+				latencies = nil
+			}
+		}
+	}
+
+	// After the test duration ends, send the final metrics
+
+	//	if len(latencies) > 0 {
+	//		totalLatency := time.Duration(0)
+	//		minLatency := latencies[0]
+	//		maxLatency := latencies[0]
+	//
+	//		for _, latency := range latencies {
+	//			totalLatency += latency
+	//			if latency < minLatency {
+	//				minLatency = latency
+	//			}
+	//			if latency > maxLatency {
+	//				maxLatency = latency
+	//			}
+	//		}
+	//
+	//		metricsChan <- models.MessageLatencyMetric{
+	//			TotalMessages:  messageCount,
+	//			AverageLatency: float64(totalLatency.Milliseconds()) / float64(len(latencies)),
+	//			MinLatency:     float64(minLatency.Milliseconds()),
+	//			MaxLatency:     float64(maxLatency.Milliseconds()),
+	//		}
+	//	}
+}
+
+// RunThroughputTest orchestrates the latency test and generates the report.
+func RunThroughputTest(config models.Config, qosLevel int) {
 	var connectWg sync.WaitGroup // Synchronize client connections
 	var messageWg sync.WaitGroup // Synchronize message sending
+
 	messageChan := make(chan models.MessageMetric, config.MaxConnections)
+	metricsChan := make(chan models.MessageLatencyMetric, 1)
+
+	consumerClientID := fmt.Sprintf("LE40B8BBML1%06d", config.MaxConnections+1)
+	topic := fmt.Sprintf("test/to/+")
+	messageWg.Add(1)
+	go func() {
+		messageWg.Done()
+		subscribeToTopic(consumerClientID, topic, config.BrokerAddress, config.ClientFolderPath, qosLevel, config.TestDuration.Duration, metricsChan, &messageWg)
+	}()
 
 	totalSuccessfulClients := 0
 	totalFailedClients := 0
@@ -28,8 +145,6 @@ func ThroughputTest(config models.Config) {
 
 	// Shared end time for all clients
 	testEndTime := time.Now().Add(config.TestDuration.Duration)
-
-	startTime := time.Now() // Record test start time
 
 	// Iterate through batches
 	for batch := 1; totalSuccessfulClients+totalFailedClients < config.MaxConnections; batch++ {
@@ -79,7 +194,7 @@ func ThroughputTest(config models.Config) {
 
 				// Start sending messages
 				messageWg.Add(1)
-				go utils.SendMessages(client, id, fmt.Sprintf("test/to/%s", id), utils.GenerateMessage(config.MessageSize), testEndTime, &config, messageChan, &messageWg)
+				go utils.SendMessages(client, id, fmt.Sprintf("test/to/%s", id), config.MessageSize, testEndTime, &config, messageChan, &messageWg)
 			}(clientID)
 		}
 
@@ -115,7 +230,6 @@ func ThroughputTest(config models.Config) {
 			MaxConnectionTime:     maxConnTime,
 		})
 
-		//		log.Printf("Batch %d completed: Success: %d, Fail: %d", batch, batchSuccess, batchFail)
 		log.Printf("Batch %d: Success: %d, Fail: %d, Avg: %v, Min: %v, Max: %v",
 			batch, batchSuccess, batchFail, avgConnTime, minConnTime, maxConnTime)
 	}
@@ -124,50 +238,41 @@ func ThroughputTest(config models.Config) {
 	messageWg.Wait()
 	close(messageChan)
 
+	// Generate message latency metrics
+	var messageLatencyMetric models.MessageLatencyMetric
+	for metric := range metricsChan {
+		messageLatencyMetric = metric
+	}
+	fmt.Println(messageLatencyMetric.TotalMessages, messageLatencyMetric.AverageLatency, messageLatencyMetric.MinLatency, messageLatencyMetric.MaxLatency)
+	close(metricsChan)
+
 	// Collect message metrics
 	totalMessagesSent := 0
 	totalMessagesFailed := 0
-	//var messageMetrics []models.MessageMetric
+	var messageMetrics []models.MessageMetric
 
 	for metrics := range messageChan {
 		totalMessagesSent += metrics.MessagesSent
 		totalMessagesFailed += metrics.MessagesFailed
-		//messageMetrics = append(messageMetrics, metrics)
+		messageMetrics = append(messageMetrics, metrics)
 	}
-
-	endTime := time.Now() // Record test end time
-
-	// Calculate overall average connection time
-	overallAvgConnTime := time.Duration(0)
-	if totalSuccessfulClients > 0 {
-		overallAvgConnTime = totalConnectionTime / time.Duration(totalSuccessfulClients)
-	}
-	// Calculate average connections per second
-	testDuration := endTime.Sub(startTime).Seconds()
-	avgConnectionsPerSecond := float64(totalSuccessfulClients) / testDuration
 
 	// Calculate throughput
 	duration := config.TestDuration.Duration.Seconds()
 	throughput := float64(totalMessagesSent) / duration
 
 	// Prepare the report
-	summary := models.SummaryData{
-		TotalConnectionsAttempted:    totalSuccessfulClients + totalFailedClients,
-		TotalSuccessfulConnections:   totalSuccessfulClients,
-		TotalFailedConnections:       totalFailedClients,
-		OverallAverageConnectionTime: overallAvgConnTime,
-		AverageConnectionsPerSecond:  avgConnectionsPerSecond,
-		StartTime:                    startTime,
-		EndTime:                      endTime,
-		ConnectMetrics:               connectMetrics,
-		TotalMessagesSent:            totalMessagesSent,
-		TotalMessagesFailed:          totalMessagesFailed,
-		OverallThroughput:            throughput,
-		//MessageMetrics:               messageMetrics,
+	summary := models.ThroughputData{
+		StartTime:             time.Time{},
+		EndTime:               time.Time{},
+		TotalMessagesSent:     totalMessagesSent,
+		TotalMessagesFailed:   totalMessagesFailed,
+		OverallThroughput:     throughput,
+		MessageReceiveLatency: messageLatencyMetric,
 	}
 
 	// Write report to file
-	reportFile, err := os.Create(config.ReportFile)
+	reportFile, err := os.Create(fmt.Sprintf("%s/throughput_report.json", config.ReportDir))
 	if err != nil {
 		log.Fatalf("Failed to create report file: %v", err)
 	}
@@ -179,5 +284,5 @@ func ThroughputTest(config models.Config) {
 	}
 	reportFile.Write(reportJSON)
 
-	log.Printf("Throughput test completed. Report saved to %s", config.ReportFile)
+	log.Printf("Event latency test completed. Report saved to %s", fmt.Sprintf("%s/throughput_report.json", config.ReportDir))
 }

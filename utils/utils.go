@@ -5,14 +5,14 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
+	"github.com/wukongcloud/mqtt-performace-test/models"
 	"io/ioutil"
-	"log"
 	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/wukongcloud/mqtt-performace-test/models"
 )
 
 func NewTLSConfig(caFile, certFile, keyFile string) (*tls.Config, error) {
@@ -46,8 +46,20 @@ func GenerateMessage(size int) []byte {
 	return []byte(base64.StdEncoding.EncodeToString(msg)[:size])
 }
 
+// GenerateMessageWithTimestamp creates a payload with a timestamp prepended.
+func GenerateMessageWithTimestamp(size int) []byte {
+	payload := make([]byte, size)
+	_, _ = rand.Read(payload)
+
+	timestamp := time.Now().UnixNano() // Ensure the timestamp is updated with each call
+	timestampBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(timestampBytes, uint64(timestamp))
+
+	return append(timestampBytes, payload...)
+}
+
 // SendMessages sends messages for a connected client until the test end time
-func SendMessages(client mqtt.Client, clientID string, topic string, message []byte, testEndTime time.Time, config *models.Config, metricsChan chan<- models.MessageMetric, wg *sync.WaitGroup) {
+func SendMessages(client mqtt.Client, clientID string, topic string, messageSize int, testEndTime time.Time, config *models.Config, metricsChan chan<- models.MessageMetric, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	messagesSent := 0
@@ -56,12 +68,12 @@ func SendMessages(client mqtt.Client, clientID string, topic string, message []b
 
 	for range ticker.C {
 		if time.Now().After(testEndTime) {
-			ticker.Stop()
 			break
 		}
 
+		message := GenerateMessageWithTimestamp(messagesSent)
 		token := client.Publish(topic, 1, false, message)
-		if token.WaitTimeout(config.ConnectTimeout.Duration) && token.Error() != nil {
+		if token.WaitTimeout(5*time.Second) && token.Error() != nil {
 			messagesFailed++
 		} else {
 			messagesSent++
@@ -73,5 +85,6 @@ func SendMessages(client mqtt.Client, clientID string, topic string, message []b
 		MessagesSent:   messagesSent,
 		MessagesFailed: messagesFailed,
 	}
-	log.Printf("Client %s finished sending messages. Sent: %d, Failed: %d", clientID, messagesSent, messagesFailed)
+	// Debug
+	// log.Printf("Client %s finished sending messages. Sent: %d, Failed: %d", clientID, messagesSent, messagesFailed)
 }
